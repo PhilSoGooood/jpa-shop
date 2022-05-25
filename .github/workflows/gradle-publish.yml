@@ -29,7 +29,29 @@ jobs:
         run: chmod +x gradlew
       - name: Build with Gradle
         run: ./gradlew build
-        
+
+      # 도커 빌드(도커 이미지 생성)
+      - name: Docker build
+        run: |
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker build -t jpa-shop-test .
+          docker tag jpa-shop-test ${{ secrets.DOCKER_USERNAME }}/jpa-shop:${GITHUB_SHA::7}
+          docker push ${{ secrets.DOCKER_USERNAME }}/jpa-shop:${GITHUB_SHA::7}
+
+      - name: Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ec2-3-35-210-139.ap-northeast-2.compute.amazonaws.com
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GITHUB_SHA
+          script: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/jpa-shop:${GITHUB_SHA::7}
+            docker tag ${{ secrets.DOCKER_USERNAME }}/jpa-shop:${GITHUB_SHA::7} jpa-shop
+            docker stop server
+            docker run -d --rm --name server -p 80:8080 jpa-shop
+
+
       - name: action-slack
         uses: 8398a7/action-slack@v3
         with:
@@ -39,37 +61,3 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} # required
         if: always() # Pick up events even if the job fails or is canceled.
-        
-  # 디렉토리 생성
-      - name: Make Directory
-        run: mkdir -p deploy
-
-      # Jar 파일 복사
-      - name: Copy Jar
-        run: cp ./build/libs/*.jar ./deploy
-
-      # appspec.yml 파일 복사
-      - name: Copy appspec.yml
-        run: cp appspec.yml ./deploy
-
-      # script files 복사
-      - name: Copy script
-        run: cp ./scripts/*.sh ./deploy
-
-      # 파일 압축
-      - name: Make zip file
-        run: zip -r ./jpa-shop.zip ./deploy
-
-      # Deploy
-      - name: Deploy
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
-
-      - name: Upload to S3
-        run: aws s3 cp --region ap-northeast-2 --acl private ./jpa-shop.zip s3://gitaction-bucket-by-phil/
-
-      - name: CodeDeploy
-        run: aws deploy create-deployment --application-name gitaction-jpa-shop --deployment-group-name gitaction-jpa-shop-group --s3-location bucket=gitaction-bucket-by-phil,key=jpa-shop.zip,bundleType=zip
